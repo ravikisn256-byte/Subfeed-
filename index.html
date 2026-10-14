@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111111">
+<title>SubFeed — Your subscriptions only</title>
+<style>
+:root{color-scheme:dark;--bg:#0f0f0f;--panel:#181818;--line:#2a2a2a;--muted:#aaa;--text:#f7f7f7;--red:#ff0033}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+button,input{font:inherit}button{cursor:pointer;border:0;border-radius:999px;padding:10px 15px;font-weight:650}
+.top{position:sticky;top:0;z-index:5;background:#111e;backdrop-filter:blur(16px);border-bottom:1px solid var(--line);padding:12px 14px;display:flex;align-items:center;gap:12px}
+.logo{display:flex;align-items:center;gap:8px;font-weight:850;font-size:19px;white-space:nowrap}.play{background:var(--red);width:29px;height:21px;border-radius:7px;display:grid;place-items:center;font-size:12px}
+.search{flex:1;min-width:0;background:#222;border:1px solid #383838;color:white;border-radius:24px;padding:10px 14px;outline:none}
+#signIn{background:#f1f1f1;color:#111;white-space:nowrap;padding:10px 13px}#signOut{background:#292929;color:white;display:none}
+main{max-width:1100px;margin:auto;padding:15px 12px 90px}.status{color:var(--muted);font-size:13px;margin:6px 2px 15px}
+.banner{background:linear-gradient(130deg,#262626,#171717);border:1px solid var(--line);border-radius:18px;padding:22px 18px;margin:12px 0 20px}
+.banner h1{font-size:25px;margin:0 0 8px;letter-spacing:-.6px}.banner p{color:#c5c5c5;margin:0 0 16px;max-width:620px}
+.primary{background:var(--red);color:white}.secondary{background:#303030;color:white}.filters{display:flex;gap:8px;overflow:auto;padding:2px 0 15px;scrollbar-width:none}.chip{background:#292929;color:white;white-space:nowrap;padding:8px 13px;font-size:13px}.chip.active{background:#f1f1f1;color:#111}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px 13px}.video{min-width:0;cursor:pointer}.thumbwrap{position:relative;aspect-ratio:16/9;background:#252525;border-radius:12px;overflow:hidden}.thumb{width:100%;height:100%;object-fit:cover;display:block}.duration{position:absolute;right:7px;bottom:7px;background:#000c;padding:2px 5px;border-radius:4px;font-size:11px}.meta{display:flex;gap:10px;padding-top:10px}.avatar{width:35px;height:35px;border-radius:50%;object-fit:cover;background:#333;flex-shrink:0}.details{min-width:0}.title{font-size:14px;font-weight:650;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.channel,.date{font-size:12px;color:var(--muted);margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.empty{padding:28px 18px;border:1px dashed #444;border-radius:16px;color:#ccc;text-align:center}.empty h2{color:white;font-size:19px}.error{color:#ffaaaa;white-space:pre-wrap}.hidden{display:none!important}.foot{color:#888;font-size:12px;text-align:center;padding:30px 5px}.loadrow{text-align:center;padding:24px}
+@media(max-width:720px){.grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 10px}.top{gap:8px;padding:10px}.logo{font-size:17px}.search{max-width:42vw;padding:9px 11px}#signIn{font-size:12px;padding:9px 11px}.banner{padding:18px 15px}.banner h1{font-size:23px}}
+@media(max-width:420px){.grid{grid-template-columns:1fr}.thumbwrap{border-radius:10px}.meta{padding-top:8px}.title{font-size:15px}.search{max-width:none;width:30px;flex:1}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="logo"><span class="play">▶</span> SubFeed</div>
+  <input id="search" class="search" placeholder="Search your subscriptions" aria-label="Search videos" disabled>
+  <button id="signIn">Sign in</button><button id="signOut">Sign out</button>
+</header>
+<main>
+  <div id="status" class="status">Only videos from channels you subscribe to will appear here.</div>
+  <section id="welcome" class="banner">
+    <h1>Your subscriptions. Nothing extra.</h1>
+    <p>Sign in with Google to load uploads from your subscribed YouTube channels. Videos open in YouTube, so you can watch in the original app.</p>
+    <button class="primary" id="startBtn">Continue with Google</button>
+  </section>
+  <div id="filters" class="filters hidden">
+    <button class="chip active" data-filter="all">All videos</button>
+    <button class="chip" data-filter="new">Newest</button>
+  </div>
+  <div id="error" class="empty hidden"></div>
+  <div id="videos" class="grid"></div>
+  <div id="loadrow" class="loadrow hidden"><button id="loadMore" class="secondary">Load more from subscriptions</button></div>
+  <div class="foot">SubFeed is an independent companion website, not an official YouTube product.</div>
+</main>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+/*
+ SETUP:
+ 1. Create a Google Cloud project and enable "YouTube Data API v3".
+ 2. Create an API key and an OAuth 2.0 Client ID (Web application).
+ 3. Add your website origin to Authorized JavaScript origins.
+ 4. Paste the values below. Restrict the API key to YouTube Data API v3 and your domain.
+*/
+const API_KEY = "PASTE_YOUTUBE_DATA_API_KEY_HERE";
+const CLIENT_ID = "PASTE_GOOGLE_OAUTH_WEB_CLIENT_ID_HERE";
+const SCOPE = "https://www.googleapis.com/auth/youtube.readonly";
+
+const $ = id => document.getElementById(id);
+let accessToken = null, channels = [], videos = [], nextPages = {}, filter = "all", loading = false;
+const configured = () => !API_KEY.startsWith("PASTE_") && !CLIENT_ID.startsWith("PASTE_");
+
+function showError(message){
+  $("error").classList.remove("hidden");
+  $("error").innerHTML = "<h2>Could not load videos</h2><div class='error'></div>";
+  $("error").querySelector(".error").textContent = message;
+}
+function clearError(){ $("error").classList.add("hidden"); }
+function setStatus(s){ $("status").textContent = s; }
+function escapeText(s){ return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+function signIn(){
+  if(!configured()){
+    showError("Setup needed: add your YouTube Data API key and Google OAuth Client ID in index.html. See README.txt in the project folder.");
+    return;
+  }
+  if(!window.google?.accounts?.oauth2){
+    showError("Google sign-in is still loading. Please wait a moment and try again.");
+    return;
+  }
+  const client = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID, scope: SCOPE,
+    callback: async (response) => {
+      if(response.error){ showError("Google sign-in failed: " + response.error); return; }
+      accessToken = response.access_token;
+      $("signIn").style.display = "none"; $("signOut").style.display = "inline-block";
+      $("welcome").classList.add("hidden"); $("filters").classList.remove("hidden");
+      $("search").disabled = false;
+      await loadSubscriptions();
+    }
+  });
+  client.requestAccessToken({prompt:"consent"});
+}
+$("signIn").addEventListener("click", signIn);
+$("startBtn").addEventListener("click", signIn);
+$("signOut").addEventListener("click", ()=>{
+  if(accessToken && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(accessToken, ()=>{});
+  accessToken=null; channels=[]; videos=[]; nextPages={};
+  $("videos").innerHTML=""; $("filters").classList.add("hidden"); $("welcome").classList.remove("hidden");
+  $("signIn").style.display="inline-block"; $("signOut").style.display="none"; $("search").value=""; $("search").disabled=true;
+  setStatus("Signed out. Sign in to load your subscribed channels."); clearError();
+});
+async function api(path, params={}, needsAuth=true){
+  const url = new URL("https://www.googleapis.com/youtube/v3/"+path);
+  Object.entries({...params,key:API_KEY}).forEach(([k,v])=>{if(v!==undefined&&v!==null&&v!=="")url.searchParams.set(k,v)});
+  const headers = needsAuth ? {Authorization:"Bearer "+accessToken} : {};
+  const res = await fetch(url,{headers});
+  const data = await res.json();
+  if(!res.ok) throw new Error(data?.error?.message || `YouTube API error (${res.status})`);
+  return data;
+}
+async function loadSubscriptions(){
+  loading=true; clearError(); setStatus("Loading your subscribed channels…");
+  try{
+    channels=[]; let token="";
+    do{
+      const data=await api("subscriptions",{part:"snippet,contentDetails",mine:true,maxResults:50,pageToken:token});
+      for(const item of data.items||[]){
+        const sn=item.snippet||{};
+        channels.push({id:sn.resourceId?.channelId,title:sn.title||"Channel",avatar:sn.thumbnails?.default?.url||""});
+      }
+      token=data.nextPageToken||"";
+    }while(token);
+    if(!channels.length){setStatus("No subscriptions found on this Google/YouTube account."); $("videos").innerHTML=""; return;}
+    setStatus(`Found ${channels.length} subscribed channels. Loading their uploads…`);
+    // Resolve uploads playlists in batches to avoid excessive requests.
+    for(let i=0;i<channels.length;i+=50){
+      const batch=channels.slice(i,i+50).map(c=>c.id).filter(Boolean);
+      if(!batch.length)continue;
+      const data=await api("channels",{part:"contentDetails,snippet",id:batch.join(","),maxResults:50});
+      const map=new Map((data.items||[]).map(c=>[c.id,c]));
+      channels.slice(i,i+50).forEach(c=>{
+        const full=map.get(c.id);
+        c.uploads=full?.contentDetails?.relatedPlaylists?.uploads;
+        if(full?.snippet?.thumbnails?.default?.url)c.avatar=full.snippet.thumbnails.default.url;
+      });
+    }
+    nextPages={}; videos=[];
+    // Load the newest page for every subscribed channel. This includes normal uploads,
+    // Shorts, and public live-stream uploads when they appear in the channel's uploads playlist.
+    for(let i=0;i<channels.length;i++){
+      const c=channels[i]; if(!c.uploads)continue;
+      try{ await loadChannelPage(c,false); }
+      catch(e){ console.warn("Skipped channel due to API error:",c.title,e.message); }
+      if(i%8===7) setStatus(`Loading subscribed channels… ${i+1}/${channels.length}`);
+    }
+    videos.sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
+    render();
+    setStatus(`${channels.length} subscribed channels · ${videos.length} recent uploads loaded. Only your subscriptions are shown.`);
+  }catch(e){showError(e.message+"\\n\\nCheck that YouTube Data API v3 is enabled and OAuth permissions were granted.");}
+  finally{loading=false;}
+}
+async function loadChannelPage(channel, append=true){
+  const page=nextPages[channel.id]||"";
+  const data=await api("playlistItems",{part:"snippet,contentDetails",playlistId:channel.uploads,maxResults:50,pageToken:page});
+  const items=(data.items||[]).map(item=>{
+    const s=item.snippet||{}, rid=s.resourceId||{};
+    const id=rid.videoId||item.contentDetails?.videoId;
+    if(!id)return null;
+    return {id,title:s.title||"Untitled video",channel:s.channelTitle||channel.title,channelId:channel.id,
+      avatar:channel.avatar,thumb:s.thumbnails?.maxres?.url||s.thumbnails?.high?.url||s.thumbnails?.medium?.url||s.thumbnails?.default?.url||"",
+      publishedAt:s.publishedAt||item.contentDetails?.videoPublishedAt||"",description:s.description||""};
+  }).filter(v=>v && v.title!=="Deleted video" && v.title!=="Private video");
+  if(append) videos.push(...items); else videos.push(...items);
+  nextPages[channel.id]=data.nextPageToken||null;
+}
+function render(){
+  clearError();
+  const query=$("search").value.trim().toLowerCase();
+  let list=videos.filter(v=>(!query || (v.title+" "+v.channel+" "+v.description).toLowerCase().includes(query)));
+  if(filter==="new")list.sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt));
+  $("videos").innerHTML=list.map(v=>`<article class="video" data-id="${escapeText(v.id)}" tabindex="0" role="link" aria-label="Open ${escapeText(v.title)} in YouTube">
+    <div class="thumbwrap"><img class="thumb" loading="lazy" src="${escapeText(v.thumb)}" alt="" onerror="this.style.opacity='.25'"></div>
+    <div class="meta"><img class="avatar" loading="lazy" src="${escapeText(v.avatar)}" alt=""><div class="details">
+      <div class="title">${escapeText(v.title)}</div><div class="channel">${escapeText(v.channel)}</div>
+      <div class="date">${v.publishedAt?new Date(v.publishedAt).toLocaleDateString():""}</div>
+    </div></div></article>`).join("");
+  $("videos").querySelectorAll(".video").forEach(el=>{
+    const open=()=>openInYouTube(el.dataset.id);
+    el.addEventListener("click",open); el.addEventListener("keydown",e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();open();}});
+  });
+  $("loadrow").classList.toggle("hidden",!channels.some(c=>nextPages[c.id]));
+}
+function openInYouTube(id){
+  // A normal YouTube HTTPS URL is usually handed to the installed YouTube app by Android.
+  // If app-link handling is disabled, it opens YouTube in the browser instead.
+  window.location.href="https://www.youtube.com/watch?v="+encodeURIComponent(id);
+}
+$("search").addEventListener("input",render);
+document.querySelectorAll(".chip").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".chip").forEach(x=>x.classList.remove("active")); b.classList.add("active"); filter=b.dataset.filter; render();
+}));
+$("loadMore").addEventListener("click",async()=>{
+  if(loading)return; loading=true; $("loadMore").textContent="Loading…";
+  try{
+    // Fetch one additional page from every subscribed channel that has more.
+    for(const c of channels){if(nextPages[c.id]){try{await loadChannelPage(c,true)}catch(e){console.warn(e.message)}}}
+    videos.sort((a,b)=>new Date(b.publishedAt)-new Date(a.publishedAt)); render();
+    setStatus(`${channels.length} subscribed channels · ${videos.length} uploads loaded. No outside channels are added.`);
+  }catch(e){showError(e.message)}finally{loading=false;$("loadMore").textContent="Load more from subscriptions";}
+});
+</script>
+</body>
+</html>
